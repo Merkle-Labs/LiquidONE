@@ -1,0 +1,13 @@
+dependencies:
+  -  OpenZeppelin/openzeppelin-contracts@4.4.1
+compiler:
+  solc:
+    remappings:
+      - '@openzeppelin=OpenZeppelin/openzeppelin-contracts@4.4.1'
+dotenv: .env
+wallets:
+  from_key_1: ${PRIVATE_KEY}
+  from_key_2: ${PRIVATE_KEY2}
+  from_key_3: ${PRIVATE_KEY3}
+node:
+    test_net: ${test_net}
