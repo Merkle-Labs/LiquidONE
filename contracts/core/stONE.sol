@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2022 MerkleLabs
 // SPDX-License-Identifier: GPL-3.0
 
+
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -8,6 +9,10 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "../lib/StakingContract.sol";
 import "./oneLidoNFT.sol";
+
+/**
+ * @title Lido on Harmony. 
+ */
 
 contract stONE is
     StakingContract,
@@ -17,10 +22,10 @@ contract stONE is
     event StakedEvent(address indexed _from, uint256 indexed _amount);
     event UnstakedEvent(address indexed _from, uint256 indexed _amount);
     event ClaimedEvent(
-        address indexed _from, 
-        uint256 indexed _id, 
+        address indexed _from,
+        uint256 indexed _id,
         uint256 indexed _amount
-        );
+    );
     event RebalanceInitiated(
         uint256 indexed rebalanceNumber,
         address[] delegateAddresses_,
@@ -38,23 +43,30 @@ contract stONE is
     // number of rebalances so far, starts with 0
     uint256 totalRebalances;
     uint256 constant BASE = 1e4;
+    
+    // minimum ONEs needed to delegate to a validator 
     uint256 public MINIMUM_AMOUNT_FOR_DELEGATION = 1e20;
+
     // Number of epoch users have to wait for undelegation
     uint256 END_EPOCH = 7;
 
-    // Total amount staked to validators during rebalance
+    // Total amount staked to the validators on rebalance
     uint256 amountStakedDuringRebalance;
+    
     oneLidoNFT public immutable nONE;
-    // pending undelegations to pay out fucntion -> need to adjust it with claimable balance /// Not using it in the code
+
+    // total ONEs in the contract which can be claimed by the users
     uint256 public totalClaimableBalance;
-    // Totak amount that is staked to the protocol
+    
+    // Totak amount staked to the protocol
     uint256 public totalStaked;
 
     // Fee accrued so far
     uint256 public collectedFee;
     uint256 public totalRewardsCollected;
+
     uint256 public rewardFee; // factor of the collected fee (% / bps)
-    uint256 public redemptionFee = 0;  // factor of the collected fee (% / bps)
+    uint256 public redemptionFee = 0;  // factor of the redemption fee (% / bps)
     uint256 public protocolRedemptionSurcharge; // pct protocol charge on redemption Fee (% / bps)
 
     uint256 public rebalanceInitiateEpoch;
@@ -67,8 +79,10 @@ contract stONE is
     bool public isRebalancing;
     uint256 public MINIMUM_DELEGATED_THRESHOLD = 1e20;
     bool public minDelegatedThresholdActivated = false;
+    
     // amount pending to each validator
     mapping(address => uint256) public accruedPendingDelegations;
+    
     // total Global accrued amonnt to be delegated
     uint256 public totalAccruedPendingDelegations;
 
@@ -82,9 +96,16 @@ contract stONE is
 
     //  multiSig
     address public feeCollector;
-
     address public rebalancer;
 
+    /**
+    * @dev The contract must be initialized with following variables:
+    * @notice sum of the allocation should be 100%
+    * @param validatorAddresses_ Addresses to which the ONEs will be delegated
+    * @param validatorPercentages_ validator allocation distribution
+    * @param rebalancer_ will have the right to rebalnce
+    * @param feeCollector_ will get all the protocol fees
+    */
     constructor(
         address[] memory validatorAddresses_,
         uint256[] memory validatorPercentages_,
@@ -115,7 +136,11 @@ contract stONE is
         isRebalancing = false;
     }
 
-    
+    /**
+    * @dev Convert 'amount_' of ONE to stONE
+    * @param amount_ amount in ONE
+    * @return amount in stONE, total stONEs and totalStaked
+    */
     function convertONEToStONE(uint256 amount_)
         public
         view
@@ -131,15 +156,20 @@ contract stONE is
         return (amountInStONE, stONESupply, totalStaked);
     }
 
-
+     /**
+     * @dev Send funds to the contract and mints stONE to msg.sender
+     * @notice Requires that msg.value is greater than the MINIMUM_AMOUNT_FOR_DELEGATION
+     * @param amount_ - of stONE which needs to be converted back to ONE
+     * @return oneToReceive - ONEs the user will recieve on unstaking
+     */
     function stake(uint256 amount_)
-        external 
-        payable 
+        external
+        payable
         returns (uint256)
-    {   
-        
+    {
+
         require(
-            amount_ >= MINIMUM_AMOUNT_FOR_DELEGATION, 
+            amount_ >= MINIMUM_AMOUNT_FOR_DELEGATION,
             "Minimum amount to stake is 100 ONE"
         );
         _updateClaimableBalance(false);
@@ -161,6 +191,11 @@ contract stONE is
         return tokenToMint;
     }
 
+    /**
+    * @dev Convert 'amount_' of stONE to ONE
+    * @param amount_ amount in ONE
+    * @return amount in ONE, total stONEs and totalStaked
+    */
     function convertStONEToONE(uint256 amount_)
         public
         view
@@ -176,11 +211,18 @@ contract stONE is
         return (amountInONE, stONESupply, totalStaked);
     }
 
-    function unstake(uint256 amount_) 
+     /**
+     * @dev Send stONEs token to the contract and mints a ticket which can 
+     * be claimed after END_EPOCH no of epochs
+     * @notice Requires that user has sufficient stONE with him
+     * @param amount_ - of stONE which needs to be converted back to ONE
+     * @return oneToReceive - ONEs the user will recieve on unstaking
+     */
+    function unstake(uint256 amount_)
         external
-        returns (uint256) 
+        returns (uint256)
     {
-        // The user should have more drONEs than the input amount
+        // The user should have more stONE than the input amount
         require(balanceOf(msg.sender) >= amount_, "Not enough stONE");
 
         (
@@ -192,7 +234,7 @@ contract stONE is
         stakeRewards();
         _updateClaimableBalance(false);
         _unstake(oneToReceive);
-        
+
 
         // END EPOCH should increase by 1 during protocol rebalnce
         uint256 _endEpoch;
@@ -214,8 +256,16 @@ contract stONE is
         return oneToReceive;
     }
 
-    function claim(uint256 tokenId_) 
-        external 
+    /**
+     * @dev Claims tokenId & receives the token amount from the contract balance 
+     * @notice Requires user to be the owner(or approved) of the token
+     * @notice Requires contract to have sufficient balance to pay back the user
+     * @notice Requires if the ticket is Unlocked
+     * @param tokenId_ - Id of the token that is to be claimed
+     * @return _amount claimed by the user
+     */
+    function claim(uint256 tokenId_)
+        external
         returns (uint256)
     {
         // need to check if he is the owner of the token ID
@@ -225,49 +275,59 @@ contract stONE is
             "Not Owner and not approved"
         );
 
-        uint256 amount_ = nONE.getAmountOfTokenByIndex(tokenId_);
+        uint256 _amount = nONE.getAmountOfTokenByIndex(tokenId_);
         require(
-            amount_ <= totalClaimableBalance, 
+            _amount <= totalClaimableBalance,
             "Not enough ONE in the pool"
         );
 
         require(
             _epoch() > nONE.getClaimableEpochOfTokenByIndex(tokenId_),
-            " Not yet claimable"
+            "Not yet claimable"
         );
 
         stakeRewards();
-        
+
         nONE.burn(tokenId_);
         // totalClaimableBalance -= amount_;
 
-        
-        uint256 _redemptionFeeAmount = redemptionFee * amount_ / BASE;
-        uint256 netAmountToPay = amount_ - _redemptionFeeAmount;
+
+        uint256 _redemptionFeeAmount = redemptionFee * _amount / BASE;
+        uint256 netAmountToPay = _amount - _redemptionFeeAmount;
         uint256 protocolSurchargeAmount = _redemptionFeeAmount * protocolRedemptionSurcharge / BASE;
         uint256 redemptionFeeToReStake = _redemptionFeeAmount - protocolSurchargeAmount;
 
         _stake(redemptionFeeToReStake, false);
-        
+
+        totalClaimableBalance -= _amount;
+
         (bool success, ) = payable(msg.sender).call {
             value: netAmountToPay
         }("");
 
         require(success, "Failed to send ONE");
 
-        _updateClaimableBalance(false);
-        emit ClaimedEvent(msg.sender, tokenId_, amount_);
+        emit ClaimedEvent(msg.sender, tokenId_, _amount);
 
-        return amount_;
+        return _amount;
     }
 
-    function reDelegate(uint256 tokenId_) 
+
+    /**
+     * @dev Token NFT can be redelegated post 1 epoch when it was generated
+     * @notice Requires user to be the owner(or approved) of the token
+     * @notice Requires amount to be greated than MINIMUM_AMOUNT_FOR_DELEGATION
+     * @notice Requires current epoch to be different to the ticket mintedEpoch
+     * @param tokenId_ - Id of the token that is to be redelegated
+     * @return _amount redelegated by the user
+     */
+    function reDelegate(uint256 tokenId_)
         external
         returns (uint256)
     {
 
         require(
-            nONE.checkOwnerOrApproved(msg.sender, tokenId_), 
+            nONE.checkOwnerOrApproved(msg.sender, tokenId_),
             "Not Owner and not approved"
         );
 
@@ -276,21 +336,21 @@ contract stONE is
         uint256 _endEpoch = nONE.getClaimableEpochOfTokenByIndex(tokenId_);
 
         require(
-            _amount >= MINIMUM_AMOUNT_FOR_DELEGATION, 
+            _amount >= MINIMUM_AMOUNT_FOR_DELEGATION,
             "Only Claimable, min amount is 100 ONE"
         );
 
-        require(_epoch() > _mintedEpoch, "Try again on Next epoch");
+        require(_epoch() > _mintedEpoch, "Try again on next epoch");
 
         stakeRewards();
         _updateClaimableBalance(false);
-        
+
         (
             uint256 tokenToMint,
             uint256 tokenSupply,
             uint256 oneStaked
         ) = convertONEToStONE(_amount);
-        
+
         // token to be burned
         uint256 _toBurn = tokenId_;
 
@@ -300,8 +360,7 @@ contract stONE is
         else{
             _stake(_amount, false);
         }
-        
-        
+
         _updateClaimableBalance(false);
 
         totalStaked = totalStaked + _amount;
@@ -314,8 +373,13 @@ contract stONE is
         return _amount;
     }
 
-    function stakeRewards() 
-        public 
+    /**
+     * @dev Collect and stake the net reward amount to the validators. Rewards fee
+     * are also charged here
+     * @return rewards amount staked back to all the validators
+     */
+    function stakeRewards()
+        public
         returns (uint256)
     {
 
@@ -339,8 +403,8 @@ contract stONE is
             accruedPendingDelegations[validatorAddresses[index]] =
                 accruedPendingDelegations[validatorAddresses[index]] +
                 _rewardStake;
-            totalAccruedPendingDelegations = 
-                totalAccruedPendingDelegations + 
+            totalAccruedPendingDelegations =
+                totalAccruedPendingDelegations +
                 _rewardStake;
         }
         // Net of fees
@@ -349,12 +413,21 @@ contract stONE is
         return rewards;
     }
 
+    /**
+     * @dev Initiates the rebalance by undelelating from all existing validators
+     * @notice Requires the length of new validator list and allocation list
+     * to be same
+     * @notice Requires the total allocation sum to be 100% (in bps)
+     * @notice Requires the rebalaning state to be true
+     * @param delegateAddresses_ New validators participating on the rebalance 
+     * @param delegateAllocation_ allocation distributin to the new validators
+     */
     function rebalanceInitiate(
         address[] memory delegateAddresses_,
         uint256[] memory delegateAllocation_
-    ) 
-        external 
-        onlyRebalancer 
+    )
+        external
+        onlyRebalancer
     {
 
         uint256 _currentEpoch = _epoch();
@@ -362,10 +435,8 @@ contract stONE is
             _currentEpoch > rebalanceInitiateEpoch,
             "Rebalance already initiated in this epoch"
         );
-        require(
-            rebalanceCompleteEpoch >= rebalanceInitiateEpoch,
-            "Previous rebalance not completed yet"
-        );
+        require(isRebalancing == false, "Rebalance already initiated");
+        
         require(
             delegateAddresses_.length == delegateAllocation_.length,
             "Length of delegateAddresses_ and delegateAllocation_ should be equal"
@@ -377,12 +448,12 @@ contract stONE is
         uint256 _totalDelegationPercentages;
         for (uint256 index = 0; index < delegateAllocation_.length; index++) {
 
-            _totalDelegationPercentages = 
-                _totalDelegationPercentages + 
+            _totalDelegationPercentages =
+                _totalDelegationPercentages +
                 delegateAllocation_[index];
         }
         require(
-            _totalDelegationPercentages == 10000, 
+            _totalDelegationPercentages == 10000,
             "Total delegation should be 100 percent"
         );
 
@@ -402,38 +473,45 @@ contract stONE is
 
         validatorAddresses = delegateAddresses_;
         for (uint256 index = 0; index < delegateAddresses_.length; index++) {
-            
+
             validatorPercentages[delegateAddresses_[index]] = delegateAllocation_[index];
         }
 
         rebalanceInitiateEpoch = _currentEpoch;
         isRebalancing = true;
 
-        uint256 amountToDelegate = 
-            address(this).balance - 
-            totalClaimableBalance - 
-            collectedFee;
+        // uint256 amountToDelegate =
+        //     address(this).balance -
+        //     totalClaimableBalance -
+        //     collectedFee;
 
-        _stake(amountToDelegate, false);
+        // _stake(amountToDelegate, false);
 
         emit RebalanceInitiated(
-            totalRebalances++, 
-            delegateAddresses_, 
+            totalRebalances++,
+            delegateAddresses_,
             delegateAllocation_,
             _currentEpoch
         );
     }
 
-    function rebalanceComplete() 
-        external 
-        onlyRebalancer 
+    /**
+     * @dev Completes the rebalance by allocation all the pending ONEs
+     * to the new validator based on the fresh allocations
+     * @notice Requires current epoch to be greater than epoch when the
+     * rebalance was initiated 
+     * @notice Requires the rebalaning state to be true
+     */
+    function rebalanceComplete()
+        external
+        onlyRebalancer
     {
 
         uint256 _currentEpoch = _epoch();
         require(isRebalancing == true, "Rebalance not initiated");
 
         require(
-            _currentEpoch > rebalanceInitiateEpoch, 
+            _currentEpoch > rebalanceInitiateEpoch,
             "Cannot redelegate in current epoch"
         );
 
@@ -461,10 +539,14 @@ contract stONE is
         );
     }
 
-    function collectFee() 
-        external 
+    /**
+     * @dev Total amount to be collected by the feecollector
+     * @return _toSend amount collected by the fee collecter
+     */
+    function collectFee()
+        external
         onlyOwner
-        returns (uint256) 
+        returns (uint256)
     {
         uint256 _toSend = collectedFee;
         //set to 0 before sending to avoid re-entrancy
@@ -477,41 +559,67 @@ contract stONE is
         return _toSend;
     }
 
+    /**
+     * @dev set the new redemption fee
+     * @param feePct_ factor of the redemption fee (% / bps)
+     */
     function setRedemptionFee(uint256 feePct_)
-        external 
-        onlyOwner 
+        external
+        onlyOwner
     {
         redemptionFee = feePct_;
     }
 
-    function setFee(uint256 rewardFee_) 
-        external 
-        onlyOwner 
+    /**
+     * @dev set the new reward fee
+     * @param rewardFee_ factor of the reward fee (% / bps)
+     */
+    function setFee(uint256 rewardFee_)
+        external
+        onlyOwner
     {
         rewardFee = rewardFee_;
     }
 
-    function setFeeCollector(address feeCollector_) 
-        external 
-        onlyOwner 
+    /**
+     * @dev set the new feecollector
+     * @param feeCollector_ address of the new feecollector
+     */
+    function setFeeCollector(address feeCollector_)
+        external
+        onlyOwner
     {
         feeCollector = feeCollector_;
     }
 
-    function setRebalancer(address rebalancer_) 
-        external 
-        onlyOwner 
+    /**
+     * @dev set the new rebalancer
+     * @param rebalancer_ address of the new rebalancer
+     */
+    function setRebalancer(address rebalancer_)
+        external
+        onlyOwner
     {
         rebalancer = rebalancer_;
     }
 
-    function setEndEpoch(uint256 endEpoch_) 
-        external 
-        onlyOwner 
+    /**
+     * @dev Update the number of epochs a user has to wait for his 
+     * ticket to fully unbond
+     * @param endEpoch_ new END_EPOCH
+     */
+    function setEndEpoch(uint256 endEpoch_)
+        external
+        onlyOwner
     {
         END_EPOCH = endEpoch_;
     }
 
+    /**
+     * @dev Will update the MINIMUM_AMOUNT_FOR_DELEGATION when there is a 
+     * change on the amount of ONEs can be delegated to a validator on the protocol level
+     * @param amount_ minimum amount of one that can be delegated to a validator
+     */
     function setMinimumDelegationAmount(uint256 amount_)
         external
         onlyOwner
@@ -519,6 +627,11 @@ contract stONE is
         MINIMUM_AMOUNT_FOR_DELEGATION = amount_;
     }
 
+    /**
+     * @dev Update the MINIMUM_DELEGATED_THRESHOLD when there is an change on minimum
+     * amount of ONEs which be kept delegated to a validator
+     * @param amount_ minimum amount of ONEs that can be kept delegated to a validator
+     */
     function setMinimumDelegationThreshold(uint256 amount_)
         external
         onlyOwner
@@ -526,6 +639,10 @@ contract stONE is
         MINIMUM_DELEGATED_THRESHOLD = amount_;
     }
 
+    /**
+     * @dev Activate minDelegatedThresholdActivated if it has been activated on the 
+     * protocol level
+     */
     function activateMinimumDelegationThreshold()
         external
         onlyOwner
@@ -533,6 +650,10 @@ contract stONE is
         minDelegatedThresholdActivated = true;
     }
 
+    /**
+     * @dev Turn off minDelegatedThresholdActivated - by default it's off on the
+     * protocol level
+     */
     function turnOffMinimumDelegationThreshold()
         external
         onlyOwner
@@ -540,14 +661,19 @@ contract stONE is
         minDelegatedThresholdActivated = false;
     }
 
-    function _stake(uint256 amount_, bool fromRedegatableBalance) 
-        internal 
+    /**
+     * @dev Delegates the amount_ in ONEs to the validators based on the allocation
+     * @param amount_ to be delegated to the validator 
+     * @param fromRedegatableBalance if it is a redelegatable transaction
+     */
+    function _stake(uint256 amount_, bool fromRedegatableBalance)
+        internal
     {
 
         _updateClaimableBalance(true);
         uint256 _validatorsLength = validatorAddresses.length;
         bool isEpochRebalance = _epoch() == rebalanceInitiateEpoch;
-        
+
         for (uint256 index = 0; index < _validatorsLength; index++) {
 
             address validator = validatorAddresses[index];
@@ -560,9 +686,9 @@ contract stONE is
             }
             else {
                 if (
-                    _toStake + 
+                    _toStake +
                     accruedPendingDelegations[validator]+
-                    pendingReDelegation[validator]  < 
+                    pendingReDelegation[validator]  <
                     MINIMUM_AMOUNT_FOR_DELEGATION
                 ) {
                     if(fromRedegatableBalance){
@@ -573,15 +699,15 @@ contract stONE is
                         accruedPendingDelegations[validator] += _toStake;
                         totalAccruedPendingDelegations += _toStake;
                     }
-                    
-                } 
+
+                }
                 else {
                     require(
                         _delegate(
                             validator,
-                            (_toStake + 
-                                accruedPendingDelegations[validator] + 
-                                pendingReDelegation[validator] 
+                            (_toStake +
+                                accruedPendingDelegations[validator] +
+                                pendingReDelegation[validator]
                             )
                         ),
                         "Could not delegate"
@@ -595,8 +721,8 @@ contract stONE is
                         totalAccruedPendingDelegations -
                         accruedPendingDelegations[validator];
 
-                    totalPendingReDelegation = 
-                        totalPendingReDelegation - 
+                    totalPendingReDelegation =
+                        totalPendingReDelegation -
                         pendingReDelegation[validator];
 
                     accruedPendingDelegations[validator] = 0;
@@ -610,9 +736,12 @@ contract stONE is
         }
     }
 
-
-    function _unstake(uint256 amount_) 
-        internal 
+    /**
+     * @dev Undelegates the amount_ from the validators based on the allocation
+     * @param amount_ to be undelegated from the validators
+     */
+    function _unstake(uint256 amount_)
+        internal
     {
         _updateClaimableBalance(false);
         if (isRebalancing) {} else {
@@ -624,13 +753,13 @@ contract stONE is
                 address validator = validatorAddresses[index];
                 uint256 _toUnstake = (validatorPercentages[validator] * amount_) / BASE;
 
-                uint256 validatorPendingDelegation = 
+                uint256 validatorPendingDelegation =
                     accruedPendingDelegations[validator];
-                uint256 totalStakedAtValidator = 
+                uint256 totalStakedAtValidator =
                     validatorStakedAmount[validator];
 
                 if (_toUnstake <= validatorPendingDelegation) {
-                    accruedPendingDelegations[validatorAddresses[index]] -= 
+                    accruedPendingDelegations[validatorAddresses[index]] -=
                         _toUnstake;
                     totalAccruedPendingDelegations -= _toUnstake;
                 }
@@ -638,22 +767,22 @@ contract stONE is
                 else if (totalStakedAtValidator == 0){}
 
                 else {
-                    uint256 amountToUndelegate = 
+                    uint256 amountToUndelegate =
                         _toUnstake - validatorPendingDelegation;
-                    totalAccruedPendingDelegations -= 
+                    totalAccruedPendingDelegations -=
                         validatorPendingDelegation;
                     accruedPendingDelegations[validator] = 0;
 
                     if (
-                        minDelegatedThresholdActivated && 
-                        amountToUndelegate <= 
+                        minDelegatedThresholdActivated &&
+                        amountToUndelegate <=
                         MINIMUM_DELEGATED_THRESHOLD
                     ) {
                         require(_undelegate(validator, totalStakedAtValidator), "Could not undelegate");
                         validatorStakedAmount[validator] = 0;
 
-                        pendingReDelegation[validator] = 
-                            totalStakedAtValidator - 
+                        pendingReDelegation[validator] =
+                            totalStakedAtValidator -
                             amountToUndelegate;
                         totalPendingReDelegation += pendingReDelegation[validator];
                     }
@@ -666,23 +795,29 @@ contract stONE is
         }
     }
 
+    /**
+     * @dev Updates the balance from pendingReDelegation to accruedPendingDelegations.
+     * This is only possible whenever an undelegated balance gets unbonded and are ready to
+     * be redelegated. The contract will have it on his Pending delegation list.
+     * @param amount_ to be shifted from pendingReDelegation to accrued pending delegations
+     */
     function _redelegationAmountTransfer(uint256 amount_)
         internal
         returns (uint256)
     {
         uint256 _validatorsLength = validatorAddresses.length;
-        
+
         for (uint256 index = 0; index < _validatorsLength; index++) {
-            
+
             address validator = validatorAddresses[index];
-            uint256 amountTranferToValidator = 
-                amount_ * pendingReDelegation[validator] / 
+            uint256 amountTranferToValidator =
+                amount_ * pendingReDelegation[validator] /
                 totalPendingReDelegation;
 
-            accruedPendingDelegations[validator] += 
+            accruedPendingDelegations[validator] +=
                 amountTranferToValidator;
-    
-            pendingReDelegation[validator] -= 
+
+            pendingReDelegation[validator] -=
                 amountTranferToValidator;
 
         }
@@ -690,28 +825,33 @@ contract stONE is
         totalAccruedPendingDelegations += amount_;
     }
 
-    function _updateClaimableBalance(bool stake_) 
+    /**
+     * @dev Updates the total ONEs that can be claimed by the user
+     * @param stake_ if its a fresh staking or not (no redelegation)
+     * @return totalClaimableBalance amount that can be claimed by the users
+     */
+    function _updateClaimableBalance(bool stake_)
         internal
-        returns (uint256) 
-    {   
+        returns (uint256)
+    {
         if (totalPendingReDelegation > 0) {
 
             if (
                 address(this).balance -
                 collectedFee -
                 (stake_ ? msg.value : 0) -
-                totalAccruedPendingDelegations < 
+                totalAccruedPendingDelegations <
                 totalPendingReDelegation
             ) {
                 if (
-                    totalPendingReDelegation - 
-                    address(this).balance < 
-                    totalPendingReDelegation 
+                    totalPendingReDelegation -
+                    address(this).balance <
+                    totalPendingReDelegation
                 ) {
-                    uint256 amountToTransfer = 
+                    uint256 amountToTransfer =
                         totalPendingReDelegation -
                         address(this).balance;
-                    _redelegationAmountTransfer(amountToTransfer); 
+                    _redelegationAmountTransfer(amountToTransfer);
                 }
                 totalClaimableBalance =
                     address(this).balance -
@@ -721,7 +861,7 @@ contract stONE is
             }
             else{
                 _redelegationAmountTransfer(totalPendingReDelegation);
-                
+
                 totalClaimableBalance =
                     address(this).balance -
                     collectedFee -
